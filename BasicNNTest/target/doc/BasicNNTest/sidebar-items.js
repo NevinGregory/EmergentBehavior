@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["NodeType"],"fn":["main"],"struct":["Connection","Genome","Node"]};
