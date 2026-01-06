@@ -1,0 +1,28 @@
+A Bobble - One entity that will evolve into a cool thing
+What can a bobble do
+  - Move <- Can translate around world freely
+  - Consume
+  - Build
+  - Hunt
+  - Craft (?)
+  - Reproduce (Male Bobble > age + Female Bobble > age)
+  - Age
+
+What does a bobble need
+  - Food
+  - Water
+  - Shelter (from weather and animals?)
+  - Socialization
+
+
+Neural Net Inputs:
+  - "Eyes"
+    - 5 Raycast in a conical manner
+    - Distance and Type
+  - Energy
+  - Hunger
+  - Current Velocity
+  - Relative velocity of Herbvors??
+  - Rotation/Heading of bobble
+  - Bias
+  - Oscillation?
