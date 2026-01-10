@@ -16,13 +16,16 @@ What does a bobble need
 
 
 Neural Net Inputs:
-  - "Eyes"
-    - 5 Raycast in a conical manner
-    - Distance and Type
-  - Energy
-  - Hunger
-  - Current Velocity
-  - Relative velocity of Herbvors??
-  - Rotation/Heading of bobble
+  - Sensory Inputs
+    - "Eyes"
+      - 5 Raycast in a conical manner
+      - Distance and Type
+    - Pheromones??
+    - Hunger
+    - Energy
+  - State Inputs
+    - Current Velocity
+    - Rotation/Heading of bobble
+    - Relative velocity of Herbvors??
   - Bias
   - Oscillation?
