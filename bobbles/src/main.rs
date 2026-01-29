@@ -1,243 +1,381 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use rand::Rng;
-use std::f32::consts::FRAC_PI_3;
-//use std::collections::{HashMap, HashSet};
+use rand::prelude::{IndexedRandom, IteratorRandom};
+use std::collections::{HashMap, HashSet};
+use std::f32::consts::{FRAC_PI_3, PI};
 
 // Neural Network Stuffs
-//#[derive(Debug, Clone, Copy, PartialEq)]
-//enum NodeType {
-//    Input,
-//    Hidden,
-//    Output,
-//}
-//
-//#[derive(Debug, Clone)]
-//struct Connection {
-//    from_idx: usize,
-//    to_idx: usize,
-//    weight: f32,
-//    enabled: bool,
-//    innovation: usize,
-//}
-//
-//impl Connection {
-//    fn new(from_idx: usize, to_idx: usize, weight: f32, innovation: usize) -> Self {
-//        Self {
-//            from_idx,
-//            to_idx,
-//            weight,
-//            enabled: true,
-//            innovation,
-//        }
-//    }
-//}
-//
-//#[derive(Debug, Clone, Default)]
-//struct Genome {
-//    nodes: HashMap<usize, NodeType>,
-//    connections: Vec<Connection>,
-//    pub fitness: f32,
-//}
-//
-//#[derive(Resource, Default)]
-//struct InnovationTracker {
-//    current_number: usize,
-//    history: HashMap<(usize, usize), usize>, // (from, to) -> innovation_id
-//}
-//
-//#[derive(Component)]
-//struct NeuralNetwork {
-//    nodes: Vec<NodeState>,
-//    execution_order: Vec<usize>,
-//    inputs_count: usize,
-//    output_indices: Vec<usize>,
-//}
-//
-//pub struct NodeState {
-//    pub id: usize,
-//    pub value: f32,
-//    pub incoming: Vec<(usize, f32)>, // (index_in_nodes_vec, weight)
-//    pub node_type: NodeType,
-//}
-//
-//#[derive(Component)]
-//struct Fitness(f64);
-//
-//#[derive(Resource, Default)]
-//pub struct InnovationHistory {
-//    pub map: HashMap<(usize, usize), usize>,
-//    pub next_innovation: usize,
-//    pub next_node_id: usize,
-//}
-//
-//impl InnovationHistory {
-//    pub fn get_innovation(&mut self, from: usize, to: usize) -> usize {
-//        if let Some(&id) = self.map.get(&(from, to)) {
-//            id
-//        } else {
-//            let id = self.next_innovation;
-//            self.map.insert((from, to), id);
-//            self.next_innovation += 1;
-//            id
-//        }
-//    }
-//}
-//
-//impl Genome {
-//    pub fn compile(&self) -> NeuralNetwork {
-//        let mut nodes_vec = Vec::new();
-//        let mut id_to_idx = HashMap::new();
-//
-//        for (id, node_type) in &self.nodes {
-//            id_to_idx.insert(*id, nodes_vec.len());
-//            nodes_vec.push(NodeState {
-//                id: *id,
-//                value: 0.0,
-//                incoming: Vec::new(),
-//                node_type: *node_type,
-//            });
-//        }
-//
-//        for conn in self.connections.iter().filter(|c| c.enabled) {
-//            let to_idx = id_to_idx[&conn.to_idx];
-//            let from_idx = id_to_idx[&conn.from_idx];
-//            nodes_vec[to_idx].incoming.push((from_idx, conn.weight));
-//        }
-//
-//        let mut execution_order = Vec::new();
-//        let mut visited = HashSet::new();
-//
-//        fn visit(
-//            idx: usize,
-//            nodes: &Vec<NodeState>,
-//            visited: &mut HashSet<usize>,
-//            order: &mut Vec<usize>,
-//            id_to_idx: &HashMap<usize, usize>,
-//        ) {
-//            if visited.contains(&idx) || nodes[idx].node_type == NodeType::Input {
-//                return;
-//            }
-//            for (from_idx, _) in &nodes[idx].incoming {
-//                visit(*from_idx, nodes, visited, order, id_to_idx);
-//            }
-//            visited.insert(idx);
-//            order.push(idx);
-//        }
-//
-//        let output_indices: Vec<usize> = nodes_vec
-//            .iter()
-//            .enumerate()
-//            .filter(|(_, n)| n.node_type == NodeType::Output)
-//            .map(|(i, _)| i)
-//            .collect();
-//
-//        for &out_idx in &output_indices {
-//            visit(
-//                out_idx,
-//                &nodes_vec,
-//                &mut visited,
-//                &mut execution_order,
-//                &id_to_idx,
-//            );
-//        }
-//
-//        NeuralNetwork {
-//            nodes: nodes_vec,
-//            execution_order,
-//            inputs_count: self
-//                .nodes
-//                .values()
-//                .filter(|&&t| t == NodeType::Input)
-//                .count(),
-//            output_indices,
-//        }
-//    }
-//}
-//
-//impl NeuralNetwork {
-//    pub fn activate(&mut self, inputs: &[f32]) -> Vec<f32> {
-//        let mut input_ptr = 0;
-//        for node in &mut self.nodes {
-//            if node.node_type == NodeType::Input {
-//                node.value = inputs[input_ptr];
-//                input_ptr += 1;
-//            }
-//        }
-//
-//        for &idx in &self.execution_order {
-//            let sum: f32 = self.nodes[idx]
-//                .incoming
-//                .iter()
-//                .map(|(from_idx, weight)| self.nodes[*from_idx].value * weight)
-//                .sum();
-//            self.nodes[idx].value = sum.tanh(); // Using Tanh for -1 to 1 output
-//        }
-//
-//        self.output_indices
-//            .iter()
-//            .map(|&i| self.nodes[i].value)
-//            .collect()
-//    }
-//}
+const NN_INPUT_COUNT: i32 = 21;
+const NN_OUTPUT_COUNT: i32 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NodeType {
+    Input,
+    Hidden,
+    Output,
+}
+
+#[derive(Debug, Clone)]
+struct Connection {
+    from_idx: usize,
+    to_idx: usize,
+    weight: f32,
+    enabled: bool,
+    innovation: usize,
+}
+
+impl Connection {
+    fn new(from_idx: usize, to_idx: usize, weight: f32, innovation: usize) -> Self {
+        Self {
+            from_idx,
+            to_idx,
+            weight,
+            enabled: true,
+            innovation,
+        }
+    }
+}
+
+#[derive(Component, Debug, Clone, Default)]
+struct Genome {
+    nodes: HashMap<usize, NodeType>,
+    connections: Vec<Connection>,
+}
+
+#[derive(Resource, Default)]
+struct InnovationTracker {
+    current_number: usize,
+    history: HashMap<(usize, usize), usize>, // (from, to) -> innovation_id
+}
+
+#[derive(Component)]
+struct NeuralNetwork {
+    nodes: Vec<NodeState>,
+    execution_order: Vec<usize>,
+    output_indices: Vec<usize>,
+}
+
+pub struct NodeState {
+    pub id: usize,
+    pub value: f32,
+    pub incoming: Vec<(usize, f32)>, // (index_in_nodes_vec, weight)
+    pub node_type: NodeType,
+}
+
+#[derive(Component)]
+struct Fitness(f64);
+
+#[derive(Component)]
+struct Generation(u32);
+
+#[derive(Resource, Default)]
+pub struct InnovationHistory {
+    pub map: HashMap<(usize, usize), usize>,      // (from, to) -> innovation_id
+    pub node_map: HashMap<usize, usize>,          // connection_id_split -> new_node_id
+    pub next_innovation: usize,
+    pub next_node_id: usize,
+}
+
+impl InnovationHistory {
+    // For Connections
+    pub fn get_innovation(&mut self, from: usize, to: usize) -> usize {
+        if let Some(&id) = self.map.get(&(from, to)) {
+            id
+        } else {
+            let id = self.next_innovation;
+            self.map.insert((from, to), id);
+            self.next_innovation += 1;
+            id
+        }
+    }
+
+    // For Nodes
+    pub fn get_node_id(&mut self, split_conn_id: usize) -> usize {
+        if let Some(&id) = self.node_map.get(&split_conn_id) {
+            id
+        } else {
+            let id = self.next_node_id;
+            self.node_map.insert(split_conn_id, id);
+            self.next_node_id += 1;
+            id
+        }
+    }
+}
+
+impl Genome  {
+    pub fn new_initial(inputs: usize, outputs: usize, history: &mut InnovationHistory) -> Self {
+        let mut nodes = HashMap::new();
+        let mut connections = Vec::new();
+
+        // 1. Create Input Nodes (IDs: 0 to inputs-1)
+        for i in 0..inputs {
+            nodes.insert(i, NodeType::Input);
+        }
+
+        // 2. Create Output Nodes (IDs: inputs to inputs + outputs - 1)
+        for i in 0..outputs {
+            nodes.insert(inputs + i, NodeType::Output);
+        }
+
+        // 3. Create Initial Connections (Connect every Input to every Output)
+        // This gives the "babies" a baseline starting point to evolve from.
+        for i in 0..inputs {
+            for j in 0..outputs {
+                let to_node = inputs + j;
+                let innov = history.get_innovation(i, to_node);
+                
+                connections.push(Connection {
+                    from_idx: i,
+                    to_idx: to_node,
+                    weight: rand::random_range(-1.0..1.0), // Random starting weights
+                    enabled: true,
+                    innovation: innov,
+                });
+            }
+        }
+
+        // 4. Update the InnovationHistory counters
+        // Ensure the next node created via mutation starts after our I/O nodes
+        if history.next_node_id < (inputs + outputs) {
+            history.next_node_id = inputs + outputs;
+        }
+
+        Self {
+            nodes,
+            connections,
+            fitness: 0.0,
+        }
+    }
+
+    pub fn crossover(parent_a: &Genome, parent_b: &Genome, fitness_a: &Fitness, fitness_b: &Fitness) -> Self {
+        let mut rng = rand::thread_rng();
+        let mut child = Genome::default();
+
+        // 1. Determine the fitter parent (needed for disjoint/excess genes)
+        let (fitter, other) = if fitness_a.0 > fitness_b.0 {
+            (parent_a, parent_b)
+        } else if fitness_b.0 > fitness_a.0 {
+            (parent_b, parent_a)
+        } else {
+            // If equal, treat parent_a as fitter but we'll take shared genes randomly
+            (parent_a, parent_b)
+        };
+
+        // 2. Inherit Nodes
+        // In simple NEAT, we take all nodes from both parents or just the fitter. 
+        // Taking from both ensures the connections have valid IDs.
+        child.nodes = fitter.nodes.clone();
+        for (id, node_type) in &other.nodes {
+            child.nodes.entry(*id).or_insert(*node_type);
+        }
+
+        // 3. Inherit Connections
+        let mut other_conns: HashMap<usize, &Connection> = other.connections.iter()
+            .map(|c| (c.innovation, c)).collect();
+
+        for conn_f in &fitter.connections {
+            if let Some(conn_o) = other_conns.get(&conn_f.innovation) {
+                // MATCHING GENE: Pick randomly from either parent
+                if rand::random::<bool>() {
+                    child.connections.push(conn_f.clone());
+                } else {
+                    child.connections.push((*conn_o).clone());
+                }
+            } else {
+                // DISJOINT/EXCESS GENE: Inherit from the fitter parent
+                child.connections.push(conn_f.clone());
+            }
+        }
+
+        child
+    }
+
+    pub fn compile(&self) -> NeuralNetwork {
+        let mut nodes_vec = Vec::new();
+        let mut id_to_idx = HashMap::new();
+
+        // 1. DANGER: HashMap iteration is random. 
+        // We MUST sort the IDs so Input #1 is always Input #1.
+        let mut sorted_ids: Vec<_> = self.nodes.keys().cloned().collect();
+        sorted_ids.sort();
+
+        // 2. Map IDs to Vector Indices
+        for (idx, id) in sorted_ids.iter().enumerate() {
+            id_to_idx.insert(*id, idx);
+            nodes_vec.push(NodeState {
+                id: *id,
+                value: 0.0,
+                incoming: Vec::new(),
+                node_type: self.nodes[id],
+            });
+        }
+
+        // 3. Fill the 'incoming' connections for each node
+        for conn in self.connections.iter().filter(|c| c.enabled) {
+            let to_idx = id_to_idx[&conn.to_idx];
+            let from_idx = id_to_idx[&conn.from_idx];
+            nodes_vec[to_idx].incoming.push((from_idx, conn.weight));
+        }
+
+        // 4. TOPOLOGICAL SORT (Execution Order)
+        // This ensures nodes are calculated in the correct order (Inputs -> Hidden -> Outputs)
+        let mut execution_order = Vec::new();
+        let mut visited = HashSet::new();
+        let mut stack = HashSet::new(); // For cycle detection
+
+        fn visit(
+            idx: usize,
+            nodes: &[NodeState],
+            visited: &mut HashSet<usize>,
+            stack: &mut HashSet<usize>,
+            order: &mut Vec<usize>,
+        ) {
+            if visited.contains(&idx) || nodes[idx].node_type == NodeType::Input {
+                return;
+            }
+            
+            // Cycle detection (NEAT usually prevents this, but safety first)
+            if stack.contains(&idx) { return; } 
+
+            stack.insert(idx);
+            for (from_idx, _) in &nodes[idx].incoming {
+                visit(*from_idx, nodes, visited, stack, order);
+            }
+            stack.remove(&idx);
+            
+            visited.insert(idx);
+            order.push(idx);
+        }
+
+        let output_indices: Vec<usize> = nodes_vec
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.node_type == NodeType::Output)
+            .map(|(i, _)| i)
+            .collect();
+
+        // Start from outputs and work backwards to find all necessary calculations
+        for &out_idx in &output_indices {
+            visit(out_idx, &nodes_vec, &mut visited, &mut stack, &mut execution_order);
+        }
+
+        NeuralNetwork {
+            nodes: nodes_vec,
+            execution_order,
+            inputs_count: self.nodes.values().filter(|&&t| t == NodeType::Input).count(),
+            output_indices,
+        }
+    }
+}
+
+impl NeuralNetwork {
+    pub fn activate(&mut self, inputs: &[f32]) -> Vec<f32> {
+        let mut input_ptr = 0;
+        for node in &mut self.nodes {
+            if node.node_type == NodeType::Input {
+                node.value = inputs[input_ptr];
+                input_ptr += 1;
+            }
+        }
+
+        for &idx in &self.execution_order {
+            let sum: f32 = self.nodes[idx]
+                .incoming
+                .iter()
+                .map(|(from_idx, weight)| self.nodes[*from_idx].value * weight)
+                .sum();
+            self.nodes[idx].value = sum.tanh(); // Using Tanh for -1 to 1 output
+        }
+
+        self.output_indices
+            .iter()
+            .map(|&i| self.nodes[i].value)
+            .collect()
+    }
+}
 
 // --- 5. MUTATION LOGIC ---
 
-//impl Genome {
-//    pub fn mutate(&mut self, history: &mut InnovationHistory) {
-//        let mut rng = rand::rng();
-//        let mutation_type: f32 = rng.random();
-//
-//        if mutation_type < 0.8 {
-//            // 80% Weight Mutation
-//            for conn in &mut self.connections {
-//                if rng.random_bool(0.9) {
-//                    conn.weight += rng.random_range(-0.1..0.1); // Nudge
-//                } else {
-//                    conn.weight = rng.random_range(-1.0..1.0); // Reset
-//                }
-//            }
-//        } else if mutation_type < 0.85 {
-//            // 5% Add Connection
-//            let keys: Vec<usize> = self.nodes.keys().cloned().collect();
-//            let from_idx = *keys.choose(&mut rng).unwrap();
-//            let to_idx = *keys.choose(&mut rng).unwrap();
-//
-//            // Basic check: don't connect to an input, and don't connect to self
-//            if self.nodes[&to_idx] != NodeType::Input && from_idx != to_idx {
-//                let innov = history.get_innovation(from_idx, to_idx);
-//                self.connections.push(Connection {
-//                    from_idx,
-//                    to_idx,
-//                    weight: rng.random_range(-1.0..1.0),
-//                    enabled: true,
-//                    innovation: innov,
-//                });
-//            }
-//        } else if mutation_type < 0.88 {
-//            // 3% Add Node
-//            if let Some(conn) = self
-//                .connections
-//                .iter_mut()
-//                .filter(|c| c.enabled)
-//                .choose(&mut rng)
-//            {
-//                conn.enabled = false;
-//                let new_id = history.next_node_id;
-//                history.next_node_id += 1;
-//
-//                self.nodes.insert(new_id, NodeType::Hidden);
-//
-//                // Add two connections to replace the old one
-//                let innov1 = history.get_innovation(conn.from_idx, new_id);
-//                let innov2 = history.get_innovation(new_id, conn.to_idx);
-//
-//                //self.connections.push(Connection { from_idx: conn.from_idx, to_idx: new_id, weight: 1.0, enabled: true, innovation: innov1 });
-//                //self.connections.push(Connection { from_idx: new_id, to_idx: conn.to_idx, weight: conn.weight, enabled: true, innovation: innov2 });
-//            }
-//        }
-//    }
-//}
+impl Genome {
+    pub fn mutate(&mut self, history: &mut InnovationHistory) {
+        let mut rng = rand::rng();
+        let mutation_type: f32 = rng.random();
+
+        if mutation_type < 0.8 {
+            // 80% Weight Mutation
+            for conn in &mut self.connections {
+                if rng.random_bool(0.9) {
+                    conn.weight += rng.random_range(-0.1..0.1); // Nudge
+                } else {
+                    conn.weight = rng.random_range(-1.0..1.0); // Reset
+                }
+            }
+        } else if mutation_type < 0.85 {
+            // 5% Add Connection
+            let keys: Vec<usize> = self.nodes.keys().cloned().collect();
+            let from_idx = *keys.choose(&mut rng).unwrap();
+            let to_idx = *keys.choose(&mut rng).unwrap();
+
+            // Basic check: don't connect to an input, and don't connect to self
+            if self.nodes[&to_idx] != NodeType::Input && from_idx != to_idx {
+                let innov = history.get_innovation(from_idx, to_idx);
+                self.connections.push(Connection {
+                    from_idx,
+                    to_idx,
+                    weight: rng.random_range(-1.0..1.0),
+                    enabled: true,
+                    innovation: innov,
+                });
+            }
+        } else if mutation_type < 0.88 {
+            let mut new_connections = Vec::new();
+            // --- 3% Add Node ---
+            if let Some(conn_idx) = self.connections.iter()
+                .enumerate()
+                .filter(|(_, c)| c.enabled)
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>()
+                .choose(&mut rng) 
+            {
+                // 1. Disable the chosen connection
+                let (from_idx, to_idx, old_weight, old_innov) = {
+                    let conn = &mut self.connections[*conn_idx];
+                    conn.enabled = false;
+                    (conn.from_idx, conn.to_idx, conn.weight, conn.innovation)
+                };
+
+                // 2. Get or Create a Node ID for this specific split
+                // This ensures structural alignment across the whole population
+                let new_node_id = history.get_node_id(old_innov); 
+
+                // 3. Add the hidden node (if it doesn't already exist in this genome)
+                self.nodes.insert(new_node_id, NodeType::Hidden);
+
+                // 4. Create two new connections
+                let innov1 = history.get_innovation(from_idx, new_node_id);
+                let innov2 = history.get_innovation(new_node_id, to_idx);
+
+                new_connections.push(Connection {
+                    from_idx,
+                    to_idx: new_node_id,
+                    weight: 1.0, // Preserve signal
+                    enabled: true,
+                    innovation: innov1,
+                });
+
+                new_connections.push(Connection {
+                    from_idx: new_node_id,
+                    to_idx,
+                    weight: old_weight, // Preserve signal
+                    enabled: true,
+                    innovation: innov2,
+                });
+            }
+            self.connections.append(&mut new_connections);
+        }
+    }
+}
 
 // Simulation Stuffs
 
@@ -259,7 +397,7 @@ const LIFE_EXPECTANCY: f32 = 70.;
 const PREGNANCY_TIME: f32 = 20.;
 const REPRODUCTION_AGE: f32 = 18.0;
 
-const VISION_DISTANCE: f32 = 200.0;
+const VISION_DISTANCE: f32 = 100.0;
 const VISION_FOV: f32 = 2.0 * FRAC_PI_3; // 120 degree fov
 const MOVEMENT_PER_TICK: f32 = 100.0;
 
@@ -268,7 +406,7 @@ const FEMALE_COLOR: Color = Color::srgb(1., 0., 1.);
 const HOVER_COLOR: Color = Color::srgb(1., 0., 0.);
 
 #[derive(PartialEq)]
-enum BobbleGender {
+enum KreacherGender {
     Male,
     Female,
 }
@@ -285,9 +423,9 @@ struct Name {
 }
 
 #[derive(Component)]
-struct Bobble {
+struct Kreacher {
     age: f32,
-    gender: BobbleGender,
+    gender: KreacherGender,
 }
 
 #[derive(Component)]
@@ -333,6 +471,7 @@ struct Reproducing {
     child_health: f32,
     child_hunger: f32,
     child_energy: f32,
+    child_genome: Genome,
     is_male: bool,
 }
 
@@ -340,6 +479,9 @@ struct Reproducing {
 struct Vision {
     heading: Vec2,
     seeing: Vec<String>,
+    closest_food: Option<Vec2>,
+    closest_predator: Option<Vec2>,
+    closest_mate: Option<Vec2>,
 }
 
 fn main() {
@@ -352,14 +494,14 @@ fn main() {
             (
                 ((update_health, update_hunger, update_energy), despawn_dead).chain(),
                 (move_target, update_camera).chain(),
-                bobble_eating_collision,
-                bobble_reproducing_collision,
+                kreacher_eating_collision,
+                kreacher_reproducing_collision,
                 update_ui,
                 update_heading,
                 update_reproduction,
                 update_age,
                 update_vision,
-                move_bobble,
+                move_kreacher,
             ),
         )
         .run();
@@ -370,6 +512,7 @@ fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     asset_server: Res<AssetServer>,
+    mut history: ResMut<InnovationHistory>,
 ) {
     // World where we move the target
     commands.spawn((
@@ -382,9 +525,9 @@ fn setup_scene(
         .spawn((
             Target,
             Transform::from_xyz(0., 0., 0.),
-            Bobble {
+            Kreacher {
                 age: 10.,
-                gender: BobbleGender::Male,
+                gender: KreacherGender::Male,
             },
             Sprite {
                 image: asset_server.load("human.png"),
@@ -422,6 +565,9 @@ fn setup_scene(
             Vision {
                 heading: Vec2::new(1.0, 0.0),
                 seeing: Vec::new(),
+                closest_food: None,
+                closest_predator: None,
+                closest_mate: None,
             },
             Name {
                 name: "Player".to_string(),
@@ -431,6 +577,7 @@ fn setup_scene(
         .insert(Sensor);
 
     let mut rng = rand::rng();
+    let base_genome = Genome::new_initial(NN_INPUT_COUNT, NN_OUTPUT_COUNT, &mut history);
     for _ in 1..=INITIAL_SPAWN {
         let x: f32 = rng.random_range(-500_f32..=500_f32);
         let y: f32 = rng.random_range(-500_f32..=500_f32);
@@ -441,8 +588,12 @@ fn setup_scene(
 
         let is_male: bool = rng.random_bool(0.5);
 
-        //Bobble
-        spawn_bobble(
+        let mut kreacher_genome = base_genome.clone();
+        kreacher_genome.mutate(&mut history);
+        let nn = kreacher_genome.compile();
+
+        //Kreacher
+        spawn_kreacher(
             &mut commands,
             &asset_server,
             Vec2::new(x, y),
@@ -451,6 +602,9 @@ fn setup_scene(
             max_health,
             max_energy,
             10.0,
+            kreacher_genome,
+            nn,
+            0
         );
     }
 
@@ -573,7 +727,7 @@ fn update_hunger(time: Res<Time>, mut hunger_query: Query<&mut Hunger>) {
     });
 }
 
-fn update_energy(time: Res<Time>, mut targets: Query<(&mut Energy, &Movement), With<Bobble>>) {
+fn update_energy(time: Res<Time>, mut targets: Query<(&mut Energy, &Movement), With<Kreacher>>) {
     targets.iter_mut().for_each(|(mut energy, movement)| {
         energy.timer.tick(time.delta());
 
@@ -609,12 +763,12 @@ fn update_health(time: Res<Time>, mut targets: Query<(&mut Health, &Hunger), Wit
     });
 }
 
-fn update_age(time: Res<Time>, mut targets: Query<(&mut Bobble, &mut Health)>) {
-    targets.iter_mut().for_each(|(mut bobble, mut health)| {
+fn update_age(time: Res<Time>, mut targets: Query<(&mut Kreacher, &mut Health)>) {
+    targets.iter_mut().for_each(|(mut kreacher, mut health)| {
         if health.alive {
-            bobble.age += time.delta_secs();
+            kreacher.age += time.delta_secs();
 
-            if bobble.age > LIFE_EXPECTANCY {
+            if kreacher.age > LIFE_EXPECTANCY {
                 health.alive = false;
             }
         }
@@ -642,15 +796,16 @@ fn update_heading(time: Res<Time>, mut targets: Query<(&Transform, &mut Movement
 
 fn update_reproduction(
     time: Res<Time>,
-    mut targets: Query<(&Transform, &mut Reproducing)>,
+    mut targets: Query<(&Transform, &mut Reproducing, &Generation)>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    targets.iter_mut().for_each(|(transform, mut reproducing)| {
+    targets.iter_mut().for_each(|(transform, mut reproducing, generation)| {
         if reproducing.pregnant {
             reproducing.timer.tick(time.delta());
             if reproducing.timer.is_finished() {
-                spawn_bobble(
+                let nn = reproducing.child_genome.compile();
+                spawn_kreacher(
                     &mut commands,
                     &asset_server,
                     Vec2::new(transform.translation.x, transform.translation.y),
@@ -659,6 +814,9 @@ fn update_reproduction(
                     reproducing.child_health,
                     reproducing.child_energy,
                     0.0,
+                    reproducing.child_genome.clone(),
+                    nn,
+                    generation.0 + 1,
                 );
 
                 reproducing.pregnant = false;
@@ -675,10 +833,10 @@ fn despawn_dead(mut commands: Commands, query: Query<(Entity, &Health), With<Hea
     });
 }
 
-fn bobble_eating_collision(
+fn kreacher_eating_collision(
     mut collision_event_reader: MessageReader<CollisionStart>,
     mut edible_collider_query: Query<(&mut Transform, &Edible)>,
-    mut bobble_collider_query: Query<&mut Hunger, With<Bobble>>,
+    mut kreacher_collider_query: Query<&mut Hunger, With<Kreacher>>,
 ) {
     for CollisionStart {
         collider1: e1,
@@ -686,12 +844,12 @@ fn bobble_eating_collision(
         ..
     } in collision_event_reader.read()
     {
-        let collision_pair = if let Ok(hunger) = bobble_collider_query.get_mut(*e1) {
+        let collision_pair = if let Ok(hunger) = kreacher_collider_query.get_mut(*e1) {
             edible_collider_query
                 .get_mut(*e2)
                 .map(|edible| (hunger, edible))
                 .ok()
-        } else if let Ok(hunger) = bobble_collider_query.get_mut(*e2) {
+        } else if let Ok(hunger) = kreacher_collider_query.get_mut(*e2) {
             edible_collider_query
                 .get_mut(*e1)
                 .map(|edible| (hunger, edible))
@@ -716,16 +874,19 @@ fn bobble_eating_collision(
     }
 }
 
-fn bobble_reproducing_collision(
+fn kreacher_reproducing_collision(
     mut collision_event_reader: MessageReader<CollisionStart>,
-    mut bobble_query: Query<(
+    mut kreacher_query: Query<(
         &Transform,
         &Hunger,
         &Health,
         &Energy,
-        &Bobble,
+        &Kreacher,
+        &Genome,
+        &Fitness,
         &mut Reproducing,
     )>,
+    mut innov_history: ResMut<InnovationHistory>,
 ) {
     for CollisionStart {
         collider1: e1,
@@ -733,15 +894,15 @@ fn bobble_reproducing_collision(
         ..
     } in collision_event_reader.read()
     {
-        if let Ok([b1, b2]) = bobble_query.get_many_mut([*e1, *e2]) {
-            let (transform1, hunger1, health1, energy1, bobble1, reproducing1) = b1;
-            let (transform2, hunger2, health2, energy2, bobble2, reproducing2) = b2;
+        if let Ok([b1, b2]) = kreacher_query.get_many_mut([*e1, *e2]) {
+            let (transform1, hunger1, health1, energy1, kreacher1, genome1, fitness1, reproducing1) = b1;
+            let (transform2, hunger2, health2, energy2, kreacher2, genome2, fitness2, reproducing2) = b2;
 
-            if bobble1.gender != bobble2.gender
+            if kreacher1.gender != kreacher2.gender
                 && !reproducing1.pregnant
                 && !reproducing2.pregnant
-                && bobble1.age > REPRODUCTION_AGE
-                && bobble2.age > REPRODUCTION_AGE
+                && kreacher1.age > REPRODUCTION_AGE
+                && kreacher2.age > REPRODUCTION_AGE
             {
                 // One is male, one is female
                 let dist = transform1
@@ -754,7 +915,7 @@ fn bobble_reproducing_collision(
                     // Now we combine them
                     let will_reproduce = rng.random_bool(0.6);
                     if will_reproduce {
-                        let mut reproducing = if bobble1.gender == BobbleGender::Female {
+                        let mut reproducing = if kreacher1.gender == KreacherGender::Female {
                             reproducing1
                         } else {
                             reproducing2
@@ -765,11 +926,16 @@ fn bobble_reproducing_collision(
                             + rng.random_range(-10_f32..10_f32);
                         let child_energy = ((energy1.max_energy + energy2.max_energy) / 2.)
                             + rng.random_range(-10_f32..10_f32);
+                        let mut baby_genome = Genome::crossover(genome1, genome2, fitness1, fitness2);
+                        baby_genome.mutate(&mut innov_history);
+                        let baby_nn = baby_genome.compile();
                         let is_male: bool = rng.random_bool(0.5);
+
                         reproducing.pregnant = true;
                         reproducing.child_health = child_health;
                         reproducing.child_hunger = child_hunger;
                         reproducing.child_energy = child_energy;
+                        reproducing.genome = baby_genome;
                         reproducing.is_male = is_male;
                         println!("Pregante");
                     }
@@ -779,7 +945,7 @@ fn bobble_reproducing_collision(
     }
 }
 
-fn spawn_bobble(
+fn spawn_kreacher(
     commands: &mut Commands,
     asset_server: &Res<AssetServer>,
     spawn_loc: Vec2,
@@ -788,17 +954,20 @@ fn spawn_bobble(
     health: f32,
     energy: f32,
     age: f32,
+    genome: Genome,
+    nn: NeuralNetwork,
+    generation: u32,
 ) {
     let start_color: Color = if is_male { MALE_COLOR } else { FEMALE_COLOR };
 
     commands
         .spawn((
-            Bobble {
+            Kreacher {
                 age: age,
                 gender: if is_male {
-                    BobbleGender::Male
+                    KreacherGender::Male
                 } else {
-                    BobbleGender::Female
+                    KreacherGender::Female
                 },
             },
             Hunger {
@@ -841,23 +1010,30 @@ fn spawn_bobble(
             Vision {
                 heading: Vec2::new(1.0, 0.0),
                 seeing: Vec::new(),
+                closest_food: None,
+                closest_predator: None,
+                closest_mate: None,
             },
             VisionTarget,
             Name {
-                name: "Bobble".to_string(),
+                name: "Kreacher".to_string(),
             },
             Movement {
                 velocity: Vec2::new(0.0, 0.0),
                 last_x: 0.0,
                 last_y: 0.0,
             },
+            genome,
+            nn,
+            Fitness(0),
+            Generation(generation.0),
         ))
         .observe(
-            |trigger: On<Pointer<Click>>, query: Query<(&Hunger, &Health)>| {
+            |trigger: On<Pointer<Click>>, query: Query<(&Hunger, &Health, &Generation)>| {
                 let clicked_entity = trigger.entity;
 
-                if let Ok((hunger, health)) = query.get(clicked_entity) {
-                    println!("Hunger: {}, Health: {}", hunger.hunger, health.health);
+                if let Ok((hunger, health, generation)) = query.get(clicked_entity) {
+                    println!("Generation: {}, Hunger: {}, Health: {}", generation.0, hunger.hunger, health.health);
                 }
             },
         )
@@ -877,9 +1053,9 @@ fn spawn_bobble(
         );
 }
 
-fn move_bobble(
+fn move_kreacher(
     time: Res<Time>,
-    mut query: Query<(&mut Transform, &Movement), (With<Bobble>, Without<Target>)>,
+    mut query: Query<(&mut Transform, &Movement), (With<Kreacher>, Without<Target>)>,
 ) {
     let mut rng = rand::rng();
 
@@ -923,19 +1099,20 @@ fn move_bobble(
 // TODO Add raycast for field of vision
 fn update_vision(
     spatial_query: SpatialQuery,
-    mut viewer_query: Query<(Entity, &Transform, &mut Vision)>,
-    vision_target_query: Query<(Entity, &Transform, &Name), With<VisionTarget>>,
+    mut viewer_query: Query<(Entity, &Transform, &mut Vision, &Kreacher)>,
+    vision_target_query: Query<(Entity, &Transform, &Name, Option<&Kreacher>), With<VisionTarget>>,
     //mut gizmos: Gizmos,
 ) {
-    viewer_query
-        .iter_mut()
-        .for_each(|(viewer_ent, viewer_transform, mut viewer_vision)| {
+    viewer_query.iter_mut().for_each(
+        |(viewer_ent, viewer_transform, mut viewer_vision, viewer_kreacher)| {
             let viewer_pos = viewer_transform.translation.truncate();
             viewer_vision.seeing.clear();
+            viewer_vision.closest_food = None;
+            viewer_vision.closest_predator = None;
+            viewer_vision.closest_mate = None;
 
-            vision_target_query
-                .iter()
-                .for_each(|(target_ent, target_transform, target_name)| {
+            vision_target_query.iter().for_each(
+                |(target_ent, target_transform, target_name, target_kreacher)| {
                     let target_pos = target_transform.translation.truncate();
                     let to_target = target_pos - viewer_pos;
                     let distance = to_target.length();
@@ -955,10 +1132,138 @@ fn update_vision(
                             &filter,
                         ) {
                             if hit.entity == target_ent {
-                                viewer_vision.seeing.push(target_name.name.clone());
+                                let side_vec = Vec2::new(viewer_vision.heading.y, -viewer_vision.heading.x);
+                                let local_x = to_target.dot(side_vec);
+                                let local_y = to_target.dot(viewer_vision.heading);
+
+                                let local_pos = Vec2::new(local_x, local_y);
+                                match target_name.name.clone() {
+                                    "Kreacher" => {
+                                        // check if it is a potential mate
+                                        if let Some(target_kreacher) = target_kreacher
+                                            && target_kreacher.age > REPRODUCTION_AGE
+                                            && target_kreacher.gender != viewer_kreacher.gender
+                                        {
+                                            viewer_vision.seeing.push("Mate".to_string());
+                                            if viewer_vision.closest_mate.map_or(true, |d| distance < d.length()) {
+                                                viewer_vision.closest_mate = Some(local_pos);
+                                            }
+                                        }
+                                    }
+                                    "Plant" => {
+                                        viewer_vision.seeing.push("Plant".to_string());
+                                        if viewer_vision.closest_food.map_or(true, |d| distance < d.length()) {
+                                            viewer_vision.closest_food = Some(local_pos);
+                                        }
+                                    }
+                                    "Predator" => {
+                                        viewer_vision.seeing.push("Predator".to_string());
+                                        if viewer_vision.closest_predator.map_or(true, |d| distance < d.length()) {
+                                            viewer_vision.closest_predator = Some(local_pos);
+                                        }
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                     }
-                });
-        });
+                },
+            );
+        },
+    );
+}
+
+fn agent_sensory_system(
+    mut query: Query<(
+        &mut NeuralNetwork,
+        &Hunger,
+        &Health,
+        &Energy,
+        &Kreacher,
+        &Movement,
+        &Vision,
+        &Reproducing,
+    )>,
+) {
+    query.iter_mut().for_each(
+        |(mut nn, hunger, health, energy, kreacher, movement, vision, reproducing)| {
+            // --- 1. Assemble the Input Vector ---
+            let mut inputs = Vec::with_capacity(NN_INPUT_COUNT);
+
+            inputs.push(hunger.hunger / hunger.max_hunger);
+            inputs.push(health.health / health.max_health);
+            inputs.push(energy.energy / energy.max_energy);
+            inputs.push(kreacher.age / LIFE_EXPECTANCY);
+
+            inputs.push(if kreacher.gender == KreacherGender::Female {
+                1.0
+            } else {
+                0.0
+            });
+            inputs.push(if reproducing.pregnant { 1.0 } else { 0.0 });
+
+            inputs.push(movement.velocity.length() / 141.42);
+            inputs.push(vision.heading.x);
+            inputs.push(vision.heading.y);
+
+            // --- 2. Handle the Vision (Strings) ---
+            inputs.push(if vision.seeing.contains(&"Plant".to_string()) {
+                1.0
+            } else {
+                0.0
+            });
+            inputs.push(if vision.seeing.contains(&"Predator".to_string()) {
+                1.0
+            } else {
+                0.0
+            });
+            inputs.push(if vision.seeing.contains(&"Mate".to_string()) {
+                1.0
+            } else {
+                0.0
+            });
+
+            if let Some(pos) = vision.closest_food {
+                inputs.push(1.0 - (pos.length() / VISION_DISTANCE).min(1.0));
+                inputs.push(pos.x / VISION_DISTANCE);
+                inputs.push(pos.y / VISION_DISTANCE);
+            } else {
+                inputs.extend([0.0, 0.0, 0.0]); // See nothing
+            }
+
+            if let Some(pos) = vision.closest_mate {
+                inputs.push(1.0 - (pos.length() / VISION_DISTANCE).min(1.0));
+                inputs.push(pos.x / VISION_DISTANCE);
+                inputs.push(pos.y / VISION_DISTANCE);
+            } else {
+                inputs.extend([0.0, 0.0, 0.0]); // See nothing
+            }
+
+            if let Some(pos) = vision.closest_predator {
+                inputs.push(1.0 - (pos.length() / VISION_DISTANCE).min(1.0));
+                inputs.push(pos.x / VISION_DISTANCE);
+                inputs.push(pos.y / VISION_DISTANCE);
+            } else {
+                inputs.extend([0.0, 0.0, 0.0]); // See nothing
+            }
+
+            // --- 3. Activate the Neural Network ---
+            let outputs = nn.activate(&inputs);
+        },
+    );
+}
+
+fn interpret_direction(outputs: &[f32]) -> usize {
+    if outputs.len() < 2 { return 1; }
+
+    let x = outputs[0];
+    let y = outputs[1];
+
+    let angle = y.atan2(x);
+
+    let normalized = (angle + PI) / (2.0 * PI);
+
+    let dir = (normalized * 8.0).round() as usize;
+    if dir == 0 || dir == 8 { 7 }
+    else { dir }
 }
