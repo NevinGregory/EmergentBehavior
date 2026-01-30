@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::f32::consts::{FRAC_PI_3, PI};
 
 // Neural Network Stuffs
-const NN_INPUT_COUNT: i32 = 21;
-const NN_OUTPUT_COUNT: i32 = 2;
+const NN_INPUT_COUNT: usize = 21;
+const NN_OUTPUT_COUNT: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum NodeType {
@@ -78,6 +78,16 @@ pub struct InnovationHistory {
 }
 
 impl InnovationHistory {
+    pub fn new(input_count: usize, output_count: usize) -> Self {
+        Self {
+            map: HashMap::new(),
+            node_map: HashMap::new(),
+            // Innovations start at 0, or at (input * output) if fully connected
+            next_innovation: input_count * output_count, 
+            // Nodes start after all Inputs and Outputs
+            next_node_id: input_count + output_count, 
+        }
+    }
     // For Connections
     pub fn get_innovation(&mut self, from: usize, to: usize) -> usize {
         if let Some(&id) = self.map.get(&(from, to)) {
@@ -144,12 +154,11 @@ impl Genome  {
         Self {
             nodes,
             connections,
-            fitness: 0.0,
         }
     }
 
     pub fn crossover(parent_a: &Genome, parent_b: &Genome, fitness_a: &Fitness, fitness_b: &Fitness) -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut child = Genome::default();
 
         // 1. Determine the fitter parent (needed for disjoint/excess genes)
@@ -263,7 +272,6 @@ impl Genome  {
         NeuralNetwork {
             nodes: nodes_vec,
             execution_order,
-            inputs_count: self.nodes.values().filter(|&&t| t == NodeType::Input).count(),
             output_indices,
         }
     }
@@ -471,7 +479,7 @@ struct Reproducing {
     child_health: f32,
     child_hunger: f32,
     child_energy: f32,
-    child_genome: Genome,
+    child_genome: Option<Genome>,
     is_male: bool,
 }
 
@@ -504,6 +512,7 @@ fn main() {
                 move_kreacher,
             ),
         )
+        .insert_resource(InnovationHistory::new(NN_INPUT_COUNT, NN_OUTPUT_COUNT))
         .run();
 }
 
@@ -604,7 +613,7 @@ fn setup_scene(
             10.0,
             kreacher_genome,
             nn,
-            0
+            Generation(0)
         );
     }
 
@@ -804,22 +813,24 @@ fn update_reproduction(
         if reproducing.pregnant {
             reproducing.timer.tick(time.delta());
             if reproducing.timer.is_finished() {
-                let nn = reproducing.child_genome.compile();
-                spawn_kreacher(
-                    &mut commands,
-                    &asset_server,
-                    Vec2::new(transform.translation.x, transform.translation.y),
-                    reproducing.is_male,
-                    reproducing.child_hunger,
-                    reproducing.child_health,
-                    reproducing.child_energy,
-                    0.0,
-                    reproducing.child_genome.clone(),
-                    nn,
-                    generation.0 + 1,
-                );
+                if let Some(ref genome) = reproducing.child_genome {
+                    let nn = genome.compile();
+                    spawn_kreacher(
+                        &mut commands,
+                        &asset_server,
+                        Vec2::new(transform.translation.x, transform.translation.y),
+                        reproducing.is_male,
+                        reproducing.child_hunger,
+                        reproducing.child_health,
+                        reproducing.child_energy,
+                        0.0,
+                        genome.clone(),
+                        nn,
+                        Generation(generation.0 + 1),
+                    );
 
-                reproducing.pregnant = false;
+                    reproducing.pregnant = false;
+                }
             }
         }
     });
@@ -935,7 +946,7 @@ fn kreacher_reproducing_collision(
                         reproducing.child_health = child_health;
                         reproducing.child_hunger = child_hunger;
                         reproducing.child_energy = child_energy;
-                        reproducing.genome = baby_genome;
+                        reproducing.child_genome = Some(baby_genome);
                         reproducing.is_male = is_male;
                         println!("Pregante");
                     }
@@ -956,7 +967,7 @@ fn spawn_kreacher(
     age: f32,
     genome: Genome,
     nn: NeuralNetwork,
-    generation: u32,
+    generation: Generation,
 ) {
     let start_color: Color = if is_male { MALE_COLOR } else { FEMALE_COLOR };
 
@@ -1002,6 +1013,7 @@ fn spawn_kreacher(
                 child_health: 0.0,
                 child_hunger: 0.0,
                 child_energy: 0.0,
+                child_genome: None,
                 is_male: false,
             },
             Collider::circle(5.0),
@@ -1023,17 +1035,14 @@ fn spawn_kreacher(
                 last_x: 0.0,
                 last_y: 0.0,
             },
-            genome,
-            nn,
-            Fitness(0),
-            Generation(generation.0),
         ))
+        .insert(Sensor)
         .observe(
             |trigger: On<Pointer<Click>>, query: Query<(&Hunger, &Health, &Generation)>| {
                 let clicked_entity = trigger.entity;
 
                 if let Ok((hunger, health, generation)) = query.get(clicked_entity) {
-                    println!("Generation: {}, Hunger: {}, Health: {}", generation.0, hunger.hunger, health.health);
+                    println!("Hunger: {}, Health: {}", hunger.hunger, health.health);
                 }
             },
         )
@@ -1137,7 +1146,7 @@ fn update_vision(
                                 let local_y = to_target.dot(viewer_vision.heading);
 
                                 let local_pos = Vec2::new(local_x, local_y);
-                                match target_name.name.clone() {
+                                match target_name.name.as_str() {
                                     "Kreacher" => {
                                         // check if it is a potential mate
                                         if let Some(target_kreacher) = target_kreacher
