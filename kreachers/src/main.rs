@@ -1,9 +1,10 @@
 use avian2d::prelude::*;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use rand::Rng;
-use rand::prelude::{IndexedRandom, IteratorRandom};
+use rand::prelude::IndexedRandom;
 use std::collections::{HashMap, HashSet};
-use std::f32::consts::{FRAC_PI_3, PI};
+use std::f32::consts::FRAC_PI_3;
 
 // Neural Network Stuffs
 const NN_INPUT_COUNT: usize = 21;
@@ -43,12 +44,6 @@ struct Genome {
     connections: Vec<Connection>,
 }
 
-#[derive(Resource, Default)]
-struct InnovationTracker {
-    current_number: usize,
-    history: HashMap<(usize, usize), usize>, // (from, to) -> innovation_id
-}
-
 #[derive(Component)]
 struct NeuralNetwork {
     nodes: Vec<NodeState>,
@@ -56,11 +51,11 @@ struct NeuralNetwork {
     output_indices: Vec<usize>,
 }
 
-pub struct NodeState {
-    pub id: usize,
-    pub value: f32,
-    pub incoming: Vec<(usize, f32)>, // (index_in_nodes_vec, weight)
-    pub node_type: NodeType,
+struct NodeState {
+    id: usize,
+    value: f32,
+    incoming: Vec<(usize, f32)>, // (index_in_nodes_vec, weight)
+    node_type: NodeType,
 }
 
 #[derive(Component)]
@@ -69,6 +64,29 @@ struct Fitness(f64);
 #[derive(Component)]
 struct Generation(u32);
 
+#[derive(Component, Default)]
+struct AIOutput {
+    direction_x: f32,
+    direction_y: f32,
+}
+
+#[derive(Component)]
+struct UpdateTimer {
+    vision_frame: u32,
+    ai_frame: u32,
+}
+
+impl Default for UpdateTimer {
+    fn default() -> Self {
+        let mut rng = rand::rng();
+        Self {
+            // Stagger updates across agents to spread load
+            vision_frame: rng.random_range(0..VISION_UPDATE_INTERVAL),
+            ai_frame: rng.random_range(0..AI_UPDATE_INTERVAL),
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct InnovationHistory {
     pub map: HashMap<(usize, usize), usize>,      // (from, to) -> innovation_id
@@ -76,6 +94,9 @@ pub struct InnovationHistory {
     pub next_innovation: usize,
     pub next_node_id: usize,
 }
+
+#[derive(Resource, Default)]
+struct FrameCount(u32);
 
 impl InnovationHistory {
     pub fn new(input_count: usize, output_count: usize) -> Self {
@@ -129,19 +150,17 @@ impl Genome  {
         }
 
         // 3. Create Initial Connections (Connect every Input to every Output)
-        // This gives the "babies" a baseline starting point to evolve from.
         for i in 0..inputs {
             for j in 0..outputs {
                 let to_node = inputs + j;
                 let innov = history.get_innovation(i, to_node);
                 
-                connections.push(Connection {
+                connections.push(Connection::new(
                     from_idx: i,
                     to_idx: to_node,
-                    weight: rand::random_range(-1.0..1.0), // Random starting weights
-                    enabled: true,
+                    weight: rand::random_range(-1.0..1.0),
                     innovation: innov,
-                });
+                ));
             }
         }
 
@@ -158,7 +177,6 @@ impl Genome  {
     }
 
     pub fn crossover(parent_a: &Genome, parent_b: &Genome, fitness_a: &Fitness, fitness_b: &Fitness) -> Self {
-        let mut rng = rand::rng();
         let mut child = Genome::default();
 
         // 1. Determine the fitter parent (needed for disjoint/excess genes)
@@ -172,7 +190,7 @@ impl Genome  {
         };
 
         // 2. Inherit Nodes
-        // In simple NEAT, we take all nodes from both parents or just the fitter. 
+        // In simple NEAT, we take all nodes from both parents or just the fitter.
         // Taking from both ensures the connections have valid IDs.
         child.nodes = fitter.nodes.clone();
         for (id, node_type) in &other.nodes {
@@ -180,7 +198,7 @@ impl Genome  {
         }
 
         // 3. Inherit Connections
-        let mut other_conns: HashMap<usize, &Connection> = other.connections.iter()
+        let other_conns: HashMap<usize, &Connection> = other.connections.iter()
             .map(|c| (c.innovation, c)).collect();
 
         for conn_f in &fitter.connections {
@@ -328,13 +346,12 @@ impl Genome {
             // Basic check: don't connect to an input, and don't connect to self
             if self.nodes[&to_idx] != NodeType::Input && from_idx != to_idx {
                 let innov = history.get_innovation(from_idx, to_idx);
-                self.connections.push(Connection {
+                self.connections.push(Connection::new(
                     from_idx,
                     to_idx,
                     weight: rng.random_range(-1.0..1.0),
-                    enabled: true,
                     innovation: innov,
-                });
+                ));
             }
         } else if mutation_type < 0.88 {
             let mut new_connections = Vec::new();
@@ -364,21 +381,19 @@ impl Genome {
                 let innov1 = history.get_innovation(from_idx, new_node_id);
                 let innov2 = history.get_innovation(new_node_id, to_idx);
 
-                new_connections.push(Connection {
+                new_connections.push(Connection::new(
                     from_idx,
                     to_idx: new_node_id,
                     weight: 1.0, // Preserve signal
-                    enabled: true,
                     innovation: innov1,
-                });
+                ));
 
-                new_connections.push(Connection {
+                new_connections.push(Connection::new(
                     from_idx: new_node_id,
                     to_idx,
                     weight: old_weight, // Preserve signal
-                    enabled: true,
                     innovation: innov2,
-                });
+                ));
             }
             self.connections.append(&mut new_connections);
         }
@@ -387,16 +402,20 @@ impl Genome {
 
 // Simulation Stuffs
 
-/// Target movement speed factor.
-const TARGET_SPEED: f32 = 200.;
-/// How quickly should the camera snap to the desired location.
+const MAP_SIZE: f32 = 1500.;
+const TARGET_SPEED: f32 = 300.;
+// How quickly should the camera snap to the desired location.
 const CAMERA_DECAY_RATE: f32 = 5.;
+const ZOOM_SPEED: f32 = 0.1;
+const MIN_ZOOM: f32 = 0.3;
+const MAX_ZOOM: f32 = 3.0;
 const PLAYER_SCALE: f32 = 64.;
 const PLANT_SCALE: f32 = 32.;
 const HUNGER_RATE: f32 = 1.0; // How much hunger decreases every gamestep
 const HEALING_RATE: f32 = 0.2;
 const ENERGY_RATE: f32 = 0.2;
-const INITIAL_SPAWN: i32 = 20;
+const INITIAL_SPAWN: i32 = 50;
+const MAX_POPULATION: usize = 150; // Cap population to prevent slowdown
 const COLLISION_DISTANCE: f32 = 20.;
 const START_HEALING_TIME: f32 = 10.;
 const START_RESTING_TIME: f32 = 2.;
@@ -408,6 +427,11 @@ const REPRODUCTION_AGE: f32 = 18.0;
 const VISION_DISTANCE: f32 = 100.0;
 const VISION_FOV: f32 = 2.0 * FRAC_PI_3; // 120 degree fov
 const MOVEMENT_PER_TICK: f32 = 100.0;
+
+// Performance optimizations
+const VISION_UPDATE_INTERVAL: u32 = 3; // Update vision every N frames
+const AI_UPDATE_INTERVAL: u32 = 2; // Update neural network every N frames
+const MAX_VISION_CHECKS: usize = 50; // Max entities to check for vision
 
 const MALE_COLOR: Color = Color::srgb(0., 0., 1.);
 const FEMALE_COLOR: Color = Color::srgb(1., 0., 1.);
@@ -500,19 +524,23 @@ fn main() {
         .add_systems(
             Update,
             (
+                increment_frame_count,
                 ((update_health, update_hunger, update_energy), despawn_dead).chain(),
                 (move_target, update_camera).chain(),
+                camera_zoom,
                 kreacher_eating_collision,
                 kreacher_reproducing_collision,
                 update_ui,
                 update_heading,
                 update_reproduction,
                 update_age,
-                update_vision,
-                move_kreacher,
+                (update_vision, agent_sensory_system, move_kreacher).chain(),
+                update_fitness,
+                cull_population,
             ),
         )
         .insert_resource(InnovationHistory::new(NN_INPUT_COUNT, NN_OUTPUT_COUNT))
+        .insert_resource(FrameCount(0))
         .run();
 }
 
@@ -525,7 +553,7 @@ fn setup_scene(
 ) {
     // World where we move the target
     commands.spawn((
-        Mesh2d(meshes.add(Rectangle::new(1000., 1000.))),
+        Mesh2d(meshes.add(Rectangle::new(MAP_SIZE, MAP_SIZE))),
         MeshMaterial2d(materials.add(Color::srgb(0.2, 0.2, -1.))),
     ));
 
@@ -534,6 +562,7 @@ fn setup_scene(
         .spawn((
             Target,
             Transform::from_xyz(0., 0., 0.),
+            /*
             Kreacher {
                 age: 10.,
                 gender: KreacherGender::Male,
@@ -578,18 +607,20 @@ fn setup_scene(
                 closest_predator: None,
                 closest_mate: None,
             },
+            */
             Name {
                 name: "Player".to_string(),
             },
-            VisionTarget,
+            //VisionTarget,
         ))
         .insert(Sensor);
 
     let mut rng = rand::rng();
     let base_genome = Genome::new_initial(NN_INPUT_COUNT, NN_OUTPUT_COUNT, &mut history);
+    let spawn_range = MAP_SIZE / 2.0 * 0.8; // Spawn within 80% of map bounds
     for _ in 1..=INITIAL_SPAWN {
-        let x: f32 = rng.random_range(-500_f32..=500_f32);
-        let y: f32 = rng.random_range(-500_f32..=500_f32);
+        let x: f32 = rng.random_range(-spawn_range..=spawn_range);
+        let y: f32 = rng.random_range(-spawn_range..=spawn_range);
 
         let max_hunger: f32 = rng.random_range(50.0..=200.0);
         let max_health: f32 = rng.random_range(50.0..=200.0);
@@ -597,9 +628,15 @@ fn setup_scene(
 
         let is_male: bool = rng.random_bool(0.5);
 
+        // Create diverse initial population with multiple mutations
         let mut kreacher_genome = base_genome.clone();
-        kreacher_genome.mutate(&mut history);
+        for _ in 0..5 {
+            kreacher_genome.mutate(&mut history);
+        }
         let nn = kreacher_genome.compile();
+
+        // Vary starting age to prevent synchronized reproduction
+        let start_age: f32 = rng.random_range(0.0..=15.0);
 
         //Kreacher
         spawn_kreacher(
@@ -610,7 +647,7 @@ fn setup_scene(
             max_hunger,
             max_health,
             max_energy,
-            10.0,
+            start_age,
             kreacher_genome,
             nn,
             Generation(0)
@@ -619,8 +656,8 @@ fn setup_scene(
 
     //Plant
     for _ in 1..=INITIAL_SPAWN {
-        let x: f32 = rng.random_range(-500_f32..=500_f32);
-        let y: f32 = rng.random_range(-500_f32..=500_f32);
+        let x: f32 = rng.random_range(-spawn_range..=spawn_range);
+        let y: f32 = rng.random_range(-spawn_range..=spawn_range);
 
         commands.spawn((
             Plant,
@@ -651,7 +688,7 @@ fn setup_scene(
 
 fn setup_ui(mut commands: Commands) {
     commands.spawn((
-        Text::new("Hunger: 100\nHealth: 100\nEnergy: 100"),
+        Text::new("Population: "),
         Node {
             position_type: PositionType::Absolute,
             bottom: px(12),
@@ -663,17 +700,21 @@ fn setup_ui(mut commands: Commands) {
 
 fn update_ui(
     mut text_query: Query<&mut Text>,
-    target_query: Single<(&Hunger, &Health, &Energy, &Movement, &Vision), With<Target>>,
+    //target_query: Single<(&Hunger, &Health, &Energy, &Movement, &Vision), With<Target>>,
+    kreacher_query: Query<&Kreacher>,
 ) {
+    let population = kreacher_query.iter().count();
+    
     for mut text in text_query.iter_mut() {
         *text = Text::new(format!(
-            "Hunger {:.2} Health {:.2} Energy {:.2} Velocity ({:.2}, {:.2}) Seeing: [{:?}]",
-            target_query.0.hunger,
-            target_query.1.health,
-            target_query.2.energy,
-            target_query.3.velocity.x,
-            target_query.3.velocity.y,
-            target_query.4.seeing,
+            "Population: {}"/*\nHunger {:.2} Health {:.2} Energy {:.2}\nVelocity ({:.2}, {:.2}) Seeing: [{:?}]"*/,
+            population,
+            //target_query.0.hunger,
+            //target_query.1.health,
+            //target_query.2.energy,
+            //target_query.3.velocity.x,
+            //target_query.3.velocity.y,
+            //target_query.4.seeing,
         ));
     }
 }
@@ -696,6 +737,26 @@ fn update_camera(
     camera
         .translation
         .smooth_nudge(&direction, CAMERA_DECAY_RATE, time.delta_secs());
+}
+
+/// Handle camera zoom with scroll wheel.
+fn camera_zoom(
+    mut scroll_events: MessageReader<MouseWheel>,
+    mut camera_query: Query<&mut Projection, With<Camera2d>>,
+) {
+    for event in scroll_events.read() {
+        if let Ok(mut projection) = camera_query.single_mut() {
+            if let Projection::Orthographic(ortho) = projection.as_mut() {
+                // Scroll up = zoom in (decrease scale), scroll down = zoom out (increase scale)
+                let zoom_delta = match event.unit {
+                    MouseScrollUnit::Line => -event.y * ZOOM_SPEED,
+                    MouseScrollUnit::Pixel => -event.y * ZOOM_SPEED * 0.01,
+                };
+
+                ortho.scale = (ortho.scale + zoom_delta).clamp(MIN_ZOOM, MAX_ZOOM);
+            }
+        }
+    }
 }
 
 /// Update the target position with keyboard inputs.
@@ -815,6 +876,7 @@ fn update_reproduction(
             if reproducing.timer.is_finished() {
                 if let Some(ref genome) = reproducing.child_genome {
                     let nn = genome.compile();
+                    //println!("A Kreacher has spawned");
                     spawn_kreacher(
                         &mut commands,
                         &asset_server,
@@ -847,7 +909,7 @@ fn despawn_dead(mut commands: Commands, query: Query<(Entity, &Health), With<Hea
 fn kreacher_eating_collision(
     mut collision_event_reader: MessageReader<CollisionStart>,
     mut edible_collider_query: Query<(&mut Transform, &Edible)>,
-    mut kreacher_collider_query: Query<&mut Hunger, With<Kreacher>>,
+    mut kreacher_collider_query: Query<(&mut Hunger, &mut Fitness), With<Kreacher>>,
 ) {
     for CollisionStart {
         collider1: e1,
@@ -855,25 +917,27 @@ fn kreacher_eating_collision(
         ..
     } in collision_event_reader.read()
     {
-        let collision_pair = if let Ok(hunger) = kreacher_collider_query.get_mut(*e1) {
+        let collision_pair = if let Ok((hunger, fitness)) = kreacher_collider_query.get_mut(*e1) {
             edible_collider_query
                 .get_mut(*e2)
-                .map(|edible| (hunger, edible))
+                .map(|edible| (hunger, fitness, edible))
                 .ok()
-        } else if let Ok(hunger) = kreacher_collider_query.get_mut(*e2) {
+        } else if let Ok((hunger, fitness)) = kreacher_collider_query.get_mut(*e2) {
             edible_collider_query
                 .get_mut(*e1)
-                .map(|edible| (hunger, edible))
+                .map(|edible| (hunger, fitness, edible))
                 .ok()
         } else {
             None
         };
 
-        if let Some((mut hunger, (mut edible_transform, edible))) = collision_pair {
+        if let Some((mut hunger, mut fitness, (mut edible_transform, edible))) = collision_pair {
             // "Despawn" eaten thing (Move it somewhere else)
             let mut rng = rand::rng();
-            let x: f32 = rng.random_range(-500_f32..=500_f32);
-            let y: f32 = rng.random_range(-500_f32..=500_f32);
+            // Clamp position to map boundaries
+            let half_map = MAP_SIZE / 2.0;
+            let x: f32 = rng.random_range(-half_map..=half_map);
+            let y: f32 = rng.random_range(-half_map..=half_map);
 
             edible_transform.translation = Vec3::new(x, y, 0.);
 
@@ -881,6 +945,9 @@ fn kreacher_eating_collision(
             if hunger.hunger > hunger.max_hunger {
                 hunger.hunger = hunger.max_hunger;
             }
+
+            // Reward finding and eating food
+            fitness.0 += 10.0;
         }
     }
 }
@@ -894,7 +961,7 @@ fn kreacher_reproducing_collision(
         &Energy,
         &Kreacher,
         &Genome,
-        &Fitness,
+        &mut Fitness,
         &mut Reproducing,
     )>,
     mut innov_history: ResMut<InnovationHistory>,
@@ -906,14 +973,25 @@ fn kreacher_reproducing_collision(
     } in collision_event_reader.read()
     {
         if let Ok([b1, b2]) = kreacher_query.get_many_mut([*e1, *e2]) {
-            let (transform1, hunger1, health1, energy1, kreacher1, genome1, fitness1, reproducing1) = b1;
-            let (transform2, hunger2, health2, energy2, kreacher2, genome2, fitness2, reproducing2) = b2;
+            let (transform1, hunger1, health1, energy1, kreacher1, genome1, mut fitness1, reproducing1) = b1;
+            let (transform2, hunger2, health2, energy2, kreacher2, genome2, mut fitness2, reproducing2) = b2;
+
+            // Require good health, hunger, and energy to reproduce
+            let can_reproduce1 = kreacher1.age > REPRODUCTION_AGE
+                && hunger1.hunger > hunger1.max_hunger * 0.8
+                && health1.health > health1.max_health * 0.5
+                && energy1.energy > energy1.max_energy * 0.5;
+
+            let can_reproduce2 = kreacher2.age > REPRODUCTION_AGE
+                && hunger2.hunger > hunger2.max_hunger * 0.8
+                && health2.health > health2.max_health * 0.5
+                && energy2.energy > energy2.max_energy * 0.5;
 
             if kreacher1.gender != kreacher2.gender
                 && !reproducing1.pregnant
                 && !reproducing2.pregnant
-                && kreacher1.age > REPRODUCTION_AGE
-                && kreacher2.age > REPRODUCTION_AGE
+                && can_reproduce1
+                && can_reproduce2
             {
                 // One is male, one is female
                 let dist = transform1
@@ -937,9 +1015,8 @@ fn kreacher_reproducing_collision(
                             + rng.random_range(-10_f32..10_f32);
                         let child_energy = ((energy1.max_energy + energy2.max_energy) / 2.)
                             + rng.random_range(-10_f32..10_f32);
-                        let mut baby_genome = Genome::crossover(genome1, genome2, fitness1, fitness2);
+                        let mut baby_genome = Genome::crossover(genome1, genome2, &fitness1, &fitness2);
                         baby_genome.mutate(&mut innov_history);
-                        let baby_nn = baby_genome.compile();
                         let is_male: bool = rng.random_bool(0.5);
 
                         reproducing.pregnant = true;
@@ -948,7 +1025,10 @@ fn kreacher_reproducing_collision(
                         reproducing.child_energy = child_energy;
                         reproducing.child_genome = Some(baby_genome);
                         reproducing.is_male = is_male;
-                        println!("Pregante");
+
+                        // Reward both parents for successful reproduction
+                        fitness1.0 += 100.0;
+                        fitness2.0 += 100.0;
                     }
                 }
             }
@@ -1036,12 +1116,20 @@ fn spawn_kreacher(
                 last_y: 0.0,
             },
         ))
+        .insert((
+            genome,
+            nn,
+            generation,
+            Fitness(0.0),
+            AIOutput::default(),
+            UpdateTimer::default(),
+        ))
         .insert(Sensor)
         .observe(
             |trigger: On<Pointer<Click>>, query: Query<(&Hunger, &Health, &Generation)>| {
                 let clicked_entity = trigger.entity;
 
-                if let Ok((hunger, health, generation)) = query.get(clicked_entity) {
+                if let Ok((hunger, health, _generation)) = query.get(clicked_entity) {
                     println!("Hunger: {}, Health: {}", hunger.hunger, health.health);
                 }
             },
@@ -1064,71 +1152,70 @@ fn spawn_kreacher(
 
 fn move_kreacher(
     time: Res<Time>,
-    mut query: Query<(&mut Transform, &Movement), (With<Kreacher>, Without<Target>)>,
+    mut query: Query<(&mut Transform, &AIOutput), (With<Kreacher>, Without<Target>)>,
 ) {
-    let mut rng = rand::rng();
+    let half_map = MAP_SIZE / 2.0;
 
-    query.iter_mut().for_each(|(mut transform, _movement)| {
-        let dir = rng.random_range(1..=8); // N, NE, E, SE, S, SW, W, NW
-
+    query.iter_mut().for_each(|(mut transform, ai_output)| {
         let movement_unit = MOVEMENT_PER_TICK * time.delta_secs();
 
-        match dir {
-            1 => {
-                transform.translation += Vec3::new(0.0, movement_unit, 0.0);
-            }
-            2 => {
-                transform.translation += Vec3::new(movement_unit, movement_unit, 0.0);
-            }
-            3 => {
-                transform.translation += Vec3::new(movement_unit, 0.0, 0.0);
-            }
-            4 => {
-                transform.translation += Vec3::new(movement_unit, -movement_unit, 0.0);
-            }
-            5 => {
-                transform.translation += Vec3::new(0.0, -movement_unit, 0.0);
-            }
-            6 => {
-                transform.translation += Vec3::new(-movement_unit, -movement_unit, 0.0);
-            }
-            7 => {
-                transform.translation += Vec3::new(-movement_unit, 0.0, 0.0);
-            }
-            8 => {
-                transform.translation += Vec3::new(-movement_unit, movement_unit, 0.0);
-            }
-            _ => {
-                println!("How did you get here");
-            }
-        }
+        // Use neural network outputs directly as movement direction
+        let direction = Vec2::new(ai_output.direction_x, ai_output.direction_y).normalize_or_zero();
+
+        transform.translation += Vec3::new(
+            direction.x * movement_unit,
+            direction.y * movement_unit,
+            0.0
+        );
+
+        // Clamp position to map boundaries
+        transform.translation.x = transform.translation.x.clamp(-half_map, half_map);
+        transform.translation.y = transform.translation.y.clamp(-half_map, half_map);
     });
 }
 
 // TODO Add raycast for field of vision
 fn update_vision(
     spatial_query: SpatialQuery,
-    mut viewer_query: Query<(Entity, &Transform, &mut Vision, &Kreacher)>,
+    frame_count: Res<FrameCount>,
+    mut viewer_query: Query<(Entity, &Transform, &mut Vision, &Kreacher, &mut UpdateTimer)>,
     vision_target_query: Query<(Entity, &Transform, &Name, Option<&Kreacher>), With<VisionTarget>>,
     //mut gizmos: Gizmos,
 ) {
     viewer_query.iter_mut().for_each(
-        |(viewer_ent, viewer_transform, mut viewer_vision, viewer_kreacher)| {
+        |(viewer_ent, viewer_transform, mut viewer_vision, viewer_kreacher, update_timer)| {
+            if frame_count.0 % VISION_UPDATE_INTERVAL != update_timer.vision_frame {
+                return;
+            }
             let viewer_pos = viewer_transform.translation.truncate();
             viewer_vision.seeing.clear();
             viewer_vision.closest_food = None;
             viewer_vision.closest_predator = None;
             viewer_vision.closest_mate = None;
 
-            vision_target_query.iter().for_each(
-                |(target_ent, target_transform, target_name, target_kreacher)| {
+            // Pre-filter and sort by distance for performance
+            let mut nearby_targets: Vec<_> = vision_target_query
+                .iter()
+                .filter_map(|(target_ent, target_transform, target_name, target_kreacher)| {
                     let target_pos = target_transform.translation.truncate();
-                    let to_target = target_pos - viewer_pos;
-                    let distance = to_target.length();
+                    let distance = viewer_pos.distance(target_pos);
 
-                    if distance < VISION_DISTANCE
-                        && viewer_vision.heading.angle_to(to_target).abs() < VISION_FOV
-                    {
+                    if distance < VISION_DISTANCE {
+                        Some((distance, target_ent, target_pos, target_name, target_kreacher))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Sort by distance and limit checks
+            nearby_targets.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            nearby_targets.truncate(MAX_VISION_CHECKS);
+
+            for (distance, target_ent, target_pos, target_name, target_kreacher) in nearby_targets {
+                let to_target = target_pos - viewer_pos;
+
+                if viewer_vision.heading.angle_to(to_target).abs() < VISION_FOV {
                         let ray_direction = to_target.normalize_or_zero();
 
                         let filter = SpatialQueryFilter::from_excluded_entities([viewer_ent]);
@@ -1175,16 +1262,17 @@ fn update_vision(
                                 }
                             }
                         }
-                    }
-                },
-            );
+                }
+            }
         },
     );
 }
 
 fn agent_sensory_system(
+    frame_count: Res<FrameCount>,
     mut query: Query<(
         &mut NeuralNetwork,
+        &mut AIOutput,
         &Hunger,
         &Health,
         &Energy,
@@ -1192,10 +1280,15 @@ fn agent_sensory_system(
         &Movement,
         &Vision,
         &Reproducing,
-    )>,
+        &mut UpdateTimer,
+    ), Without<Target>>,
 ) {
     query.iter_mut().for_each(
-        |(mut nn, hunger, health, energy, kreacher, movement, vision, reproducing)| {
+        |(mut nn, mut ai_output, hunger, health, energy, kreacher, movement, vision, reproducing, update_timer)| {
+            // Staggered AI updates: only run NN every N frames
+            if frame_count.0 % AI_UPDATE_INTERVAL != update_timer.ai_frame {
+                return;
+            }
             // --- 1. Assemble the Input Vector ---
             let mut inputs = Vec::with_capacity(NN_INPUT_COUNT);
 
@@ -1258,21 +1351,53 @@ fn agent_sensory_system(
 
             // --- 3. Activate the Neural Network ---
             let outputs = nn.activate(&inputs);
+
+            // --- 4. Store outputs for movement system with exploration noise ---
+            if outputs.len() >= 2 {
+                let mut rng = rand::rng();
+                // Add exploration noise to encourage diverse behaviors (decreases with hunger)
+                let exploration_factor = 0.3 * (hunger.hunger / hunger.max_hunger);
+                let noise_x = rng.random_range(-exploration_factor..=exploration_factor);
+                let noise_y = rng.random_range(-exploration_factor..=exploration_factor);
+
+                ai_output.direction_x = outputs[0] + noise_x;
+                ai_output.direction_y = outputs[1] + noise_y;
+            }
         },
     );
 }
 
-fn interpret_direction(outputs: &[f32]) -> usize {
-    if outputs.len() < 2 { return 1; }
+fn increment_frame_count(mut frame_count: ResMut<FrameCount>) {
+    frame_count.0 = frame_count.0.wrapping_add(1);
+}
 
-    let x = outputs[0];
-    let y = outputs[1];
+fn cull_population(
+    mut commands: Commands,
+    kreacher_query: Query<(Entity, &Fitness), With<Kreacher>>,
+) {
+    let population = kreacher_query.iter().count();
 
-    let angle = y.atan2(x);
+    if population > MAX_POPULATION {
+        let cull_count = population - MAX_POPULATION;
 
-    let normalized = (angle + PI) / (2.0 * PI);
+        // Sort by fitness (lowest first) and remove the weakest
+        let mut creatures: Vec<_> = kreacher_query.iter().collect();
+        creatures.sort_by(|a, b| a.1.0.partial_cmp(&b.1.0).unwrap());
 
-    let dir = (normalized * 8.0).round() as usize;
-    if dir == 0 || dir == 8 { 7 }
-    else { dir }
+        for (entity, _) in creatures.iter().take(cull_count) {
+            commands.entity(*entity).despawn();
+        }
+    }
+}
+
+fn update_fitness(
+    time: Res<Time>,
+    mut query: Query<(&mut Fitness, &Health), With<Kreacher>>,
+) {
+    query.iter_mut().for_each(|(mut fitness, health)| {
+        if health.alive {
+            // Increase fitness for staying alive (1 point per second)
+            fitness.0 += time.delta_secs() as f64;
+        }
+    });
 }
